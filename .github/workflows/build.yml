@@ -22,9 +22,9 @@ jobs:
           sudo cp -r extracted_iso ./iso_files
           sudo umount extracted_iso
           
-          # Удаляем старую папку (если осталась) и распаковываем систему
           sudo rm -rf squashfs
-          sudo unsquashfs iso_files/live/filesystem.squashfs
+          # ИСПРАВЛЕНИЕ: добавляем -d squashfs, чтобы распаковать в нужную папку
+          sudo unsquashfs -d squashfs iso_files/live/filesystem.squashfs
 
       - name: Customize System (Python, Wine, Auto-login)
         run: |
@@ -32,7 +32,7 @@ jobs:
           sudo mkdir -p squashfs/root
           sudo cp os_constructor.py squashfs/root/
           
-          # 2. КОПИРУЕМ DNS, чтобы интернет работал внутри системы
+          # 2. КОПИРУЕМ DNS (теперь папка etc точно существует)
           sudo cp /etc/resolv.conf squashfs/etc/resolv.conf
           
           # 3. Монтируем системные папки
@@ -63,7 +63,7 @@ jobs:
           fi
           EOF
 
-          # 7. Отмонтируем папки (чтобы не было ошибок при сборке)
+          # 7. Отмонтируем папки
           sudo umount squashfs/dev squashfs/proc squashfs/sys
 
       - name: Repack ISO
