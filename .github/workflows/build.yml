@@ -15,29 +15,30 @@ jobs:
 
       - name: Prepare overlay with Python
         run: |
-          # Создаем структуру папок
+          # 1. Создаем структуру папок
           mkdir -p overlay/root overlay/etc
           cp os_constructor.py overlay/root/
           
-          # МАГИЯ: Запускаем контейнер Alpine, скачиваем Python и распаковываем его прямо в наш оверлей
-          docker run --rm -v "$(pwd)/overlay:/overlay" alpine:3.20 sh -c "
-            # Пересоздаем каталог кэша, чтобы избежать ошибки 'Bad file descriptor'
-            rm -rf /var/cache/apk && mkdir -p /var/cache/apk
-            
-            # Добавляем флаг --no-cache для надежности
-            apk update --no-cache
-            apk fetch -R --no-cache -o /tmp/pkgs python3
-            
-            # Проверяем, что файлы действительно скачались
-            if [ -z \"\$(ls -A /tmp/pkgs/*.apk 2>/dev/null)\" ]; then
-              echo 'ERROR: No packages downloaded!'
-              exit 1
-            fi
-            
-            for f in /tmp/pkgs/*.apk; do tar -xzf \$f -C /overlay; done
-          "
+          # 2. Качаем мини-версию Alpine (чтобы установить Python без Docker)
+          wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
+          mkdir -p /tmp/chroot
+          sudo tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C /tmp/chroot
+          
+          # 3. Копируем DNS, чтобы интернет работал внутри
+          sudo cp /etc/resolv.conf /tmp/chroot/etc/resolv.conf
+          
+          # 4. Устанавливаем Python прямо внутрь этой системы
+          sudo chroot /tmp/chroot /bin/sh -c "apk update && apk add python3"
+          
+          # 5. Забираем готовые файлы Python и библиотеки в наш оверлей
+          sudo cp -a /tmp/chroot/usr overlay/
+          sudo cp -a /tmp/chroot/lib overlay/
+          sudo cp -a /tmp/chroot/etc/ssl overlay/etc/
+          
+          # Делаем файлы доступными (чтобы tar не ругался на права)
+          sudo chown -R $USER:$USER overlay
 
-          # Создаем простой скрипт запуска (без интернета и ожиданий)
+          # 6. Создаем простой скрипт запуска
           cat > overlay/root/start.sh << 'EOF'
           #!/bin/sh
           clear
@@ -49,7 +50,7 @@ jobs:
           
           chmod +x overlay/root/start.sh
 
-          # Отключаем экран логина
+          # 7. Намертво отключаем экран логина
           cat > overlay/etc/inittab << 'EOF'
           ::sysinit:/sbin/openrc sysinit
           ::sysinit:/sbin/openrc boot
@@ -60,7 +61,7 @@ jobs:
           ::shutdown:/sbin/openrc shutdown
           EOF
 
-          # Упаковываем всё в архив
+          # 8. Упаковываем всё в архив
           cd overlay && tar --owner=0 --group=0 -czf ../localhost.apkovl.tar.gz . && cd ..
 
       - name: Build ISO
@@ -75,3 +76,4 @@ jobs:
         with:
           name: os-constructor-iso
           path: os-constructor.iso
+          
