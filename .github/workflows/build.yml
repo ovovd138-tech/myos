@@ -15,19 +15,47 @@ jobs:
 
       - name: Prepare overlay
         run: |
-          mkdir -p overlay/etc/local.d overlay/etc/runlevels/default overlay/root
+          # Создаем папки
+          mkdir -p overlay/etc/local.d overlay/etc/runlevels/default overlay/etc/apk overlay/root
+          
+          # Копируем твой скрипт
           cp os_constructor.py overlay/root/
-          printf '#!/bin/sh\nexec /usr/bin/python3 /root/os_constructor.py\n' > overlay/etc/local.d/os.start
+          
+          # Прописываем репозитории Alpine (чтобы было откуда качать Python)
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > overlay/etc/apk/repositories
+          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> overlay/etc/apk/repositories
+          
+          # Создаем умный скрипт автозапуска
+          cat > overlay/etc/local.d/os.start << 'EOF'
+          #!/bin/sh
+          # Ждем 5 секунд, чтобы виртуалка успела подключиться к интернету
+          sleep 5
+          
+          # Проверяем, есть ли Python. Если нет — ставим.
+          if ! command -v python3 >/dev/null 2>&1; then
+              apk update
+              apk add python3
+          fi
+          
+          # Запускаем нашу ОС
+          exec /usr/bin/python3 /root/os_constructor.py
+          EOF
+          
+          # Делаем скрипт исполняемым
           chmod +x overlay/etc/local.d/os.start
+          
+          # Включаем автозапуск в системе
           touch overlay/etc/.default_boot_services
           ln -sf /etc/init.d/local overlay/etc/runlevels/default/local
-          cd overlay && tar --owner=0 --group=0 -czf ../my-os.apkovl.tar.gz . && cd ..
+          
+          # Упаковываем в архив
+          cd overlay && tar --owner=0 --group=0 -czf ../localhost.apkovl.tar.gz . && cd ..
 
       - name: Build ISO
         run: |
           xorriso -indev alpine-standard-3.20.3-x86_64.iso \
                   -outdev os-constructor.iso \
-                  -map my-os.apkovl.tar.gz /my-os.apkovl.tar.gz \
+                  -map localhost.apkovl.tar.gz /localhost.apkovl.tar.gz \
                   -boot_image any replay
 
       - name: Upload ISO
