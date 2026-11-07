@@ -15,44 +15,38 @@ jobs:
 
       - name: Prepare overlay with local Python packages
         run: |
-          # 1. Создаем структуру папок
           mkdir -p overlay/root/pkgs overlay/etc
           cp os_constructor.py overlay/root/
-          
-          # 2. Качаем мини-корневую систему Alpine (только для скачивания пакетов)
+
           wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
           mkdir -p /tmp/chroot
           sudo tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C /tmp/chroot
-          
-          # 3. Копируем DNS для работы интернета внутри chroot
+
           sudo cp /etc/resolv.conf /tmp/chroot/etc/resolv.conf
-          
-          # 4. Скачиваем Python и зависимости в кэш
-          sudo chroot /tmp/chroot /bin/sh -c "apk update && apk add --cache-dir /tmp/apkcache python3"
-          
-          # 5. Копируем скачанные .apk файлы в наш оверлей
-          sudo cp /tmp/chroot/tmp/apkcache/*.apk overlay/root/pkgs/
+
+          sudo mkdir -p /tmp/chroot/tmp/pkgs
+
+          sudo chroot /tmp/chroot /bin/sh -c "apk update && apk fetch -R -o /tmp/pkgs python3"
+
+          sudo cp /tmp/chroot/tmp/pkgs/*.apk overlay/root/pkgs/
           sudo chown -R $USER:$USER overlay
 
-          # 6. Создаем скрипт запуска (устанавливает Python из локальной папки и запускает меню)
           cat > overlay/root/start.sh << 'EOF'
           #!/bin/sh
           clear
           echo "Starting OS Constructor..."
-          
-          # Если Python нет, ставим его из локальных файлов (без интернета)
+
           if ! command -v python3 >/dev/null 2>&1; then
               echo "Installing Python locally..."
               apk add --allow-untrusted /root/pkgs/*.apk
           fi
-          
+
           clear
           exec /usr/bin/python3 /root/os_constructor.py
           EOF
-          
+
           chmod +x overlay/root/start.sh
 
-          # 7. Отключаем экран логина
           cat > overlay/etc/inittab << 'EOF'
           ::sysinit:/sbin/openrc sysinit
           ::sysinit:/sbin/openrc boot
@@ -63,7 +57,6 @@ jobs:
           ::shutdown:/sbin/openrc shutdown
           EOF
 
-          # 8. Упаковываем всё в архив
           cd overlay && tar --owner=0 --group=0 -czf ../localhost.apkovl.tar.gz . && cd ..
 
       - name: Build ISO
