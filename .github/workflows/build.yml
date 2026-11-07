@@ -21,8 +21,19 @@ jobs:
           
           # МАГИЯ: Запускаем контейнер Alpine, скачиваем Python и распаковываем его прямо в наш оверлей
           docker run --rm -v "$(pwd)/overlay:/overlay" alpine:3.20 sh -c "
-            apk update
-            apk fetch -R -o /tmp/pkgs python3
+            # Пересоздаем каталог кэша, чтобы избежать ошибки 'Bad file descriptor'
+            rm -rf /var/cache/apk && mkdir -p /var/cache/apk
+            
+            # Добавляем флаг --no-cache для надежности
+            apk update --no-cache
+            apk fetch -R --no-cache -o /tmp/pkgs python3
+            
+            # Проверяем, что файлы действительно скачались
+            if [ -z \"\$(ls -A /tmp/pkgs/*.apk 2>/dev/null)\" ]; then
+              echo 'ERROR: No packages downloaded!'
+              exit 1
+            fi
+            
             for f in /tmp/pkgs/*.apk; do tar -xzf \$f -C /overlay; done
           "
 
