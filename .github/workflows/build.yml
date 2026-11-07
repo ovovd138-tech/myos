@@ -13,7 +13,6 @@ jobs:
           sudo apt install -y wget xorriso squashfs-tools isolinux syslinux-utils
 
       - name: Download Debian Live ISO
-        # Исправлена ссылка: версия 12.12.0 вместо 12.5.0
         run: wget https://cdimage.debian.org/cdimage/archive/12.12.0-live/amd64/iso-hybrid/debian-live-12.12.0-amd64-standard.iso
 
       - name: Extract ISO and Squashfs
@@ -23,27 +22,32 @@ jobs:
           sudo cp -r extracted_iso ./iso_files
           sudo umount extracted_iso
           
-          # Распаковываем главный архив системы
+          # Удаляем старую папку (если осталась) и распаковываем систему
+          sudo rm -rf squashfs
           sudo unsquashfs iso_files/live/filesystem.squashfs
 
       - name: Customize System (Python, Wine, Auto-login)
         run: |
-          # 1. Копируем твой скрипт
+          # 1. ПРИНУДИТЕЛЬНО создаем папку root и копируем скрипт
+          sudo mkdir -p squashfs/root
           sudo cp os_constructor.py squashfs/root/
           
-          # 2. Монтируем системные папки для работы внутри
+          # 2. КОПИРУЕМ DNS, чтобы интернет работал внутри системы
+          sudo cp /etc/resolv.conf squashfs/etc/resolv.conf
+          
+          # 3. Монтируем системные папки
           sudo mount --bind /dev squashfs/dev
           sudo mount --bind /proc squashfs/proc
           sudo mount --bind /sys squashfs/sys
           
-          # 3. Устанавливаем Python и Wine (для exe)
+          # 4. Устанавливаем Python и Wine
           sudo chroot squashfs /bin/bash -c "
-            echo 'deb http://deb.debian.org/debian bookworm main' > /etc/apt/sources.list
+            echo 'deb http://deb.debian.org/debian bookworm main contrib non-free' > /etc/apt/sources.list
             apt-get update
             apt-get install -y python3 wine64
           "
           
-          # 4. Настраиваем автологин (вход без пароля)
+          # 5. Настраиваем автологин (вход без пароля)
           sudo mkdir -p squashfs/etc/systemd/system/getty@tty1.service.d
           sudo tee squashfs/etc/systemd/system/getty@tty1.service.d/autologin.conf << 'EOF'
           [Service]
@@ -51,7 +55,7 @@ jobs:
           ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
           EOF
 
-          # 5. Настраиваем автозапуск твоего меню при входе
+          # 6. Настраиваем автозапуск твоего меню при входе
           sudo tee squashfs/root/.profile << 'EOF'
           if [ "$(tty)" = "/dev/tty1" ]; then
               python3 /root/os_constructor.py
@@ -59,7 +63,7 @@ jobs:
           fi
           EOF
 
-          # 6. Отмонтируем папки
+          # 7. Отмонтируем папки (чтобы не было ошибок при сборке)
           sudo umount squashfs/dev squashfs/proc squashfs/sys
 
       - name: Repack ISO
