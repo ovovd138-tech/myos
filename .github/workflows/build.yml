@@ -13,51 +13,38 @@ jobs:
       - name: Download Alpine ISO
         run: wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-standard-3.20.3-x86_64.iso
 
-      - name: Prepare overlay
+      - name: Prepare overlay with Python
         run: |
-          mkdir -p overlay/etc/apk
-          mkdir -p overlay/root
-
-          # Копируем твой скрипт
+          # Создаем структуру папок
+          mkdir -p overlay/root overlay/etc
           cp os_constructor.py overlay/root/
+          
+          # МАГИЯ: Запускаем контейнер Alpine, скачиваем Python и распаковываем его прямо в наш оверлей
+          docker run --rm -v "$(pwd)/overlay:/overlay" alpine:3.20 sh -c "
+            apk update
+            apk fetch -R -o /tmp/pkgs python3
+            for f in /tmp/pkgs/*.apk; do tar -xzf \$f -C /overlay; done
+          "
 
-          # Прописываем репозитории Alpine (чтобы было откуда качать Python)
-          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > overlay/etc/apk/repositories
-          echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> overlay/etc/apk/repositories
-
-          # Создаем умный скрипт запуска
+          # Создаем простой скрипт запуска (без интернета и ожиданий)
           cat > overlay/root/start.sh << 'EOF'
           #!/bin/sh
-          # Проверяем, установлен ли Python. Если нет — ставим.
-          if ! command -v python3 >/dev/null 2>&1; then
-              echo "=== ПЕРВЫЙ ЗАПУСК: ПОДГОТОВКА СИСТЕМЫ ==="
-              echo "Ожидание подключения к интернету..."
-              echo "(Если это длится долго, проверьте сеть в виртуалке)"
-              while ! ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; do
-                  sleep 1
-              done
-              echo ""
-              echo "Интернет есть! Скачиваем Python 3 (около 10-15 секунд)..."
-              apk update
-              apk add python3
-              clear
-          fi
-          echo "Запуск ОС-Конструктора..."
-          # Запускаем твой скрипт
+          clear
+          echo "Starting OS Constructor..."
+          sleep 1
+          clear
           exec /usr/bin/python3 /root/os_constructor.py
           EOF
+          
           chmod +x overlay/root/start.sh
 
-          # Подменяем системный файл inittab, чтобы отключить экран логина
+          # Отключаем экран логина
           cat > overlay/etc/inittab << 'EOF'
           ::sysinit:/sbin/openrc sysinit
           ::sysinit:/sbin/openrc boot
           ::wait:/sbin/openrc default
-
-          # Автоматический запуск нашего скрипта на главном экране
           tty1::respawn:/sbin/getty -n -l /root/start.sh 38400 tty1
           tty2::respawn:/sbin/getty 38400 tty2
-
           ::ctrlaltdel:/sbin/reboot
           ::shutdown:/sbin/openrc shutdown
           EOF
