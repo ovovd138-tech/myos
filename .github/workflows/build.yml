@@ -1,4 +1,4 @@
-name: Build OS ISO
+name: Build Debian ISO with EXE support
 on: [push, workflow_dispatch]
 
 jobs:
@@ -8,66 +8,84 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install tools
-        run: sudo apt update && sudo apt install -y xorriso wget
-
-      - name: Download Alpine ISO
-        run: wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-standard-3.20.3-x86_64.iso
-
-      - name: Prepare overlay with local Python packages
         run: |
-          mkdir -p overlay/root/pkgs overlay/etc
-          cp os_constructor.py overlay/root/
+          sudo apt update
+          sudo apt install -y wget xorriso squashfs-tools isolinux syslinux-utils
 
-          wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
-          mkdir -p /tmp/chroot
-          sudo tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C /tmp/chroot
+      - name: Download Debian Live ISO
+        # Качаем официальный Debian (около 1 ГБ, робот справится быстро)
+        run: wget https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/debian-live-12.5.0-amd64-standard.iso
 
-          sudo cp /etc/resolv.conf /tmp/chroot/etc/resolv.conf
+      - name: Extract ISO and Squashfs
+        run: |
+          mkdir -p extracted_iso
+          sudo mount -o loop debian-live-12.5.0-amd64-standard.iso extracted_iso
+          sudo cp -r extracted_iso ./iso_files
+          sudo umount extracted_iso
+          
+          # Распаковываем главный архив системы
+          sudo unsquashfs iso_files/live/filesystem.squashfs
 
-          sudo mkdir -p /tmp/chroot/tmp/pkgs
+      - name: Customize System (Python, Wine, Auto-login)
+        run: |
+          # 1. Копируем твой скрипт
+          sudo cp os_constructor.py squashfs/root/
+          
+          # 2. Монтируем системные папки для работы внутри
+          sudo mount --bind /dev squashfs/dev
+          sudo mount --bind /proc squashfs/proc
+          sudo mount --bind /sys squashfs/sys
+          
+          # 3. Устанавливаем Python и Wine (для exe)
+          sudo chroot squashfs /bin/bash -c "
+            echo 'deb http://deb.debian.org/debian bookworm main' > /etc/apt/sources.list
+            apt-get update
+            apt-get install -y python3 wine64
+          "
+          
+          # 4. Настраиваем автологин (вход без пароля)
+          sudo mkdir -p squashfs/etc/systemd/system/getty@tty1.service.d
+          sudo tee squashfs/etc/systemd/system/getty@tty1.service.d/autologin.conf << 'EOF'
+          [Service]
+          ExecStart=
+          ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
+          EOF
 
-          sudo chroot /tmp/chroot /bin/sh -c "apk update && apk fetch -R -o /tmp/pkgs python3"
-
-          sudo cp /tmp/chroot/tmp/pkgs/*.apk overlay/root/pkgs/
-          sudo chown -R $USER:$USER overlay
-
-          cat > overlay/root/start.sh << 'EOF'
-          #!/bin/sh
-          clear
-          echo "Starting OS Constructor..."
-
-          if ! command -v python3 >/dev/null 2>&1; then
-              echo "Installing Python locally..."
-              apk add --allow-untrusted /root/pkgs/*.apk
+          # 5. Настраиваем автозапуск твоего меню при входе
+          sudo tee squashfs/root/.profile << 'EOF'
+          if [ "$(tty)" = "/dev/tty1" ]; then
+              python3 /root/os_constructor.py
+              logout
           fi
-
-          clear
-          exec /usr/bin/python3 /root/os_constructor.py
           EOF
 
-          chmod +x overlay/root/start.sh
+          # 6. Отмонтируем папки
+          sudo umount squashfs/dev squashfs/proc squashfs/sys
 
-          cat > overlay/etc/inittab << 'EOF'
-          ::sysinit:/sbin/openrc sysinit
-          ::sysinit:/sbin/openrc boot
-          ::wait:/sbin/openrc default
-          tty1::respawn:/sbin/getty -n -l /root/start.sh 38400 tty1
-          tty2::respawn:/sbin/getty 38400 tty2
-          ::ctrlaltdel:/sbin/reboot
-          ::shutdown:/sbin/openrc shutdown
-          EOF
-
-          cd overlay && tar --owner=0 --group=0 -czf ../localhost.apkovl.tar.gz . && cd ..
-
-      - name: Build ISO
+      - name: Repack ISO
         run: |
-          xorriso -indev alpine-standard-3.20.3-x86_64.iso \
-                  -outdev os-constructor.iso \
-                  -map localhost.apkovl.tar.gz /localhost.apkovl.tar.gz \
-                  -boot_image any replay
+          # 1. Запаковываем систему обратно
+          sudo mksquashfs squashfs iso_files/live/filesystem.squashfs -comp xz -e boot
+          
+          # 2. Собираем финальный ISO
+          cd iso_files
+          xorriso -as mkisofs \
+            -r -V "DEBIAN_CUSTOM" \
+            -o ../my-debian-os.iso \
+            -J -J -joliet-long \
+            -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin \
+            -partition_offset 16 \
+            -b isolinux/isolinux.bin \
+            -c isolinux/boot.cat \
+            -no-emul-boot -boot-load-size 4 -boot-info-table \
+            -eltorito-alt-boot \
+            -e boot/grub/efi.img \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            .
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: os-constructor-iso
-          path: os-constructor.iso
+          name: debian-os-iso
+          path: my-debian-os.iso
