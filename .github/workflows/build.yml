@@ -15,40 +15,54 @@ jobs:
 
       - name: Prepare overlay
         run: |
-          # Создаем папки
-          mkdir -p overlay/etc/local.d overlay/etc/runlevels/default overlay/etc/apk overlay/root
-          
+          mkdir -p overlay/etc/apk
+          mkdir -p overlay/root
+
           # Копируем твой скрипт
           cp os_constructor.py overlay/root/
-          
+
           # Прописываем репозитории Alpine (чтобы было откуда качать Python)
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/main" > overlay/etc/apk/repositories
           echo "https://dl-cdn.alpinelinux.org/alpine/v3.20/community" >> overlay/etc/apk/repositories
-          
-          # Создаем умный скрипт автозапуска
-          cat > overlay/etc/local.d/os.start << 'EOF'
+
+          # Создаем умный скрипт запуска
+          cat > overlay/root/start.sh << 'EOF'
           #!/bin/sh
-          # Ждем 5 секунд, чтобы виртуалка успела подключиться к интернету
-          sleep 5
-          
-          # Проверяем, есть ли Python. Если нет — ставим.
+          # Проверяем, установлен ли Python. Если нет — ставим.
           if ! command -v python3 >/dev/null 2>&1; then
+              echo "=== ПЕРВЫЙ ЗАПУСК: ПОДГОТОВКА СИСТЕМЫ ==="
+              echo "Ожидание подключения к интернету..."
+              echo "(Если это длится долго, проверьте сеть в виртуалке)"
+              while ! ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1; do
+                  sleep 1
+              done
+              echo ""
+              echo "Интернет есть! Скачиваем Python 3 (около 10-15 секунд)..."
               apk update
               apk add python3
+              clear
           fi
-          
-          # Запускаем нашу ОС
+          echo "Запуск ОС-Конструктора..."
+          # Запускаем твой скрипт
           exec /usr/bin/python3 /root/os_constructor.py
           EOF
-          
-          # Делаем скрипт исполняемым
-          chmod +x overlay/etc/local.d/os.start
-          
-          # Включаем автозапуск в системе
-          touch overlay/etc/.default_boot_services
-          ln -sf /etc/init.d/local overlay/etc/runlevels/default/local
-          
-          # Упаковываем в архив
+          chmod +x overlay/root/start.sh
+
+          # Подменяем системный файл inittab, чтобы отключить экран логина
+          cat > overlay/etc/inittab << 'EOF'
+          ::sysinit:/sbin/openrc sysinit
+          ::sysinit:/sbin/openrc boot
+          ::wait:/sbin/openrc default
+
+          # Автоматический запуск нашего скрипта на главном экране
+          tty1::respawn:/sbin/getty -n -l /root/start.sh 38400 tty1
+          tty2::respawn:/sbin/getty 38400 tty2
+
+          ::ctrlaltdel:/sbin/reboot
+          ::shutdown:/sbin/openrc shutdown
+          EOF
+
+          # Упаковываем всё в архив
           cd overlay && tar --owner=0 --group=0 -czf ../localhost.apkovl.tar.gz . && cd ..
 
       - name: Build ISO
