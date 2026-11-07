@@ -13,44 +13,46 @@ jobs:
       - name: Download Alpine ISO
         run: wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-standard-3.20.3-x86_64.iso
 
-      - name: Prepare overlay with Python
+      - name: Prepare overlay with local Python packages
         run: |
           # 1. Создаем структуру папок
-          mkdir -p overlay/root overlay/etc
+          mkdir -p overlay/root/pkgs overlay/etc
           cp os_constructor.py overlay/root/
           
-          # 2. Качаем мини-версию Alpine (чтобы установить Python без Docker)
+          # 2. Качаем мини-корневую систему Alpine (только для скачивания пакетов)
           wget https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.3-x86_64.tar.gz
           mkdir -p /tmp/chroot
           sudo tar -xzf alpine-minirootfs-3.20.3-x86_64.tar.gz -C /tmp/chroot
           
-          # 3. Копируем DNS, чтобы интернет работал внутри
+          # 3. Копируем DNS для работы интернета внутри chroot
           sudo cp /etc/resolv.conf /tmp/chroot/etc/resolv.conf
           
-          # 4. Устанавливаем Python прямо внутрь этой системы
-          sudo chroot /tmp/chroot /bin/sh -c "apk update && apk add python3"
+          # 4. Скачиваем Python и зависимости в кэш
+          sudo chroot /tmp/chroot /bin/sh -c "apk update && apk add --cache-dir /tmp/apkcache python3"
           
-          # 5. Забираем готовые файлы Python и библиотеки в наш оверлей
-          sudo cp -a /tmp/chroot/usr overlay/
-          sudo cp -a /tmp/chroot/lib overlay/
-          sudo cp -a /tmp/chroot/etc/ssl overlay/etc/
-          
-          # Делаем файлы доступными (чтобы tar не ругался на права)
+          # 5. Копируем скачанные .apk файлы в наш оверлей
+          sudo cp /tmp/chroot/tmp/apkcache/*.apk overlay/root/pkgs/
           sudo chown -R $USER:$USER overlay
 
-          # 6. Создаем простой скрипт запуска
+          # 6. Создаем скрипт запуска (устанавливает Python из локальной папки и запускает меню)
           cat > overlay/root/start.sh << 'EOF'
           #!/bin/sh
           clear
           echo "Starting OS Constructor..."
-          sleep 1
+          
+          # Если Python нет, ставим его из локальных файлов (без интернета)
+          if ! command -v python3 >/dev/null 2>&1; then
+              echo "Installing Python locally..."
+              apk add --allow-untrusted /root/pkgs/*.apk
+          fi
+          
           clear
           exec /usr/bin/python3 /root/os_constructor.py
           EOF
           
           chmod +x overlay/root/start.sh
 
-          # 7. Намертво отключаем экран логина
+          # 7. Отключаем экран логина
           cat > overlay/etc/inittab << 'EOF'
           ::sysinit:/sbin/openrc sysinit
           ::sysinit:/sbin/openrc boot
@@ -76,4 +78,3 @@ jobs:
         with:
           name: os-constructor-iso
           path: os-constructor.iso
-          
